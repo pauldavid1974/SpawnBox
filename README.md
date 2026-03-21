@@ -1,74 +1,105 @@
-# SpawnBox
+```
+    █████ ████   ███  █   █ █   █ ████   ███  █   █
+    █     █   █ █   █ █   █ ██  █ █   █ █   █  █ █
+    ████  ████  █████ █ █ █ █ █ █ ████  █   █   █
+        █ █     █   █ ██ ██ █  ██ █   █ █   █  █ █
+    █████ █     █   █ █   █ █   █ ████   ███  █   █
+```
 
-**Turn any spare PC into a Minecraft server — one command, no expertise required.**
+**v2.1.2 — One command. A fully managed Minecraft server.**
 
-SpawnBox is a single bash script that takes a PC running Ubuntu (or Debian, or Raspberry Pi OS) and sets up everything you need to host Minecraft servers. You run one command. SpawnBox handles the rest.
+---
+
+SpawnBox is a setup script for Linux. Point it at a machine running Ubuntu,
+Debian, or Raspberry Pi OS, and it installs [Crafty Controller](https://craftycontrol.com)
+— a free, open-source Minecraft server manager — along with [Docker](https://docker.com),
+which Crafty runs inside. Optionally it can harden your server's security and
+install [Playit.gg](https://playit.gg) so players can reach you from anywhere
+without touching your router.
+
+These are all independent, actively maintained open-source projects. SpawnBox
+doesn't own them — it just makes getting them installed and working together
+considerably less work.
 
 ```bash
 curl -sSL -O https://raw.githubusercontent.com/pauldavid1974/spawnbox/main/spawnbox.sh
 sudo bash spawnbox.sh
 ```
 
-When it's done, you get [Crafty Controller](https://craftycontrol.com) — a browser-based panel where you can create, manage, and monitor Minecraft servers without touching a terminal again.
+---
+
+## ██ What SpawnBox Installs
+
+### [Crafty Controller](https://craftycontrol.com)
+> *"A free and open-source Minecraft server manager. Start and administer
+> Minecraft servers from a user-friendly interface."*
+
+Crafty is what you'll actually use day-to-day. Once SpawnBox is done, Crafty
+gives you a web dashboard for creating servers, managing players, editing
+settings, scheduling backups, and more — all from your browser.
+
+### [Docker](https://docker.com)
+> *"A platform designed to help developers build, share, and run container
+> applications. We handle the tedious setup, so you can focus on the code."*
+
+SpawnBox runs Crafty inside a Docker container. This keeps Crafty isolated,
+makes it easy to update, and avoids conflicts with anything else on your
+machine.
 
 ---
 
-## What Gets Installed
+## ██ Optional Extras
 
-SpawnBox installs two things:
+SpawnBox will ask about these during setup. All are optional.
 
-| Component | What it does |
-|---|---|
-| [Docker](https://docker.com) | Runs Crafty in an isolated container |
-| [Crafty Controller](https://craftycontrol.com) | Web panel for managing Minecraft servers |
+### Memory
 
-That's it. SpawnBox is the installer — once setup is complete, Crafty manages its own updates and you manage your servers through Crafty's web interface.
-
-## Optional Extras
-
-During setup, SpawnBox will ask if you want any of these. All are optional — say no to everything and you still get a working Minecraft server manager.
-
-| Feature | What it does | When to say yes |
+| Option | What It Does | Recommended If... |
 |---|---|---|
-| **Swap file** | Adds 8 GB of virtual memory | Your PC has less than 16 GB of RAM |
-| **Security hardening** | Moves SSH to port 54321, enables firewall, installs brute-force protection | Your server is exposed to the internet |
-| **Playit.gg tunnel** | Lets friends outside your home network connect without port forwarding | You want external players to join |
+| **Swap File** | Adds 8 GB of virtual memory | Your machine has less than 16 GB of RAM |
+
+### Security
+
+SpawnBox can harden your server's security in up to three independent steps.
+Pick exactly the ones you want.
+
+| Option | What It Does |
+|---|---|
+| **Move SSH to port 54321** | Makes your SSH port harder to stumble across |
+| **[UFW](https://help.ubuntu.com/community/UFW) Firewall** | *"A user-friendly way to create an IPv4 or IPv6 host-based firewall."* Blocks all incoming traffic except the ports Crafty and Minecraft need |
+| **[Fail2ban](https://github.com/fail2ban/fail2ban)** | *"Scans log files and bans IP addresses that commit multiple authentication errors."* Automatically blocks brute-force login attempts |
+
+### External Access
+
+| Option | What It Does |
+|---|---|
+| **[Playit.gg](https://playit.gg)** | *"Host game servers from your own computer and let friends join from anywhere. No port forwarding required."* |
 
 ---
 
-## System Requirements
+## ██ Quick Start
 
-- **OS:** Ubuntu 22.04+, Debian 11+, or Raspberry Pi OS
-- **RAM:** 4 GB minimum (8+ GB recommended)
-- **Disk:** 10 GB free minimum
-- **Network:** Internet connection for initial setup
-
-SpawnBox does **not** install the operating system. It assumes Linux is already running on the machine.
-
----
-
-## Quick Start
-
-### Option 1 — Download and run (recommended)
+### Download and run (recommended)
 
 ```bash
 curl -sSL -O https://raw.githubusercontent.com/pauldavid1974/spawnbox/main/spawnbox.sh
 sudo bash spawnbox.sh
 ```
 
-### Option 2 — With wget
+### Or with wget
 
 ```bash
 wget https://raw.githubusercontent.com/pauldavid1974/spawnbox/main/spawnbox.sh
 sudo bash spawnbox.sh
 ```
 
-SpawnBox walks you through a short setup wizard, then shows a progress bar while it works. When it's done you'll see something like this:
+SpawnBox walks you through a short setup wizard, then shows a progress bar
+while it works. When it's done you'll see something like this:
 
 ```
-========================================================
+════════════════════════════════════════════════════════
   SpawnBox setup complete!
-========================================================
+════════════════════════════════════════════════════════
 
   Crafty Controller:  https://192.168.1.50:8443
 
@@ -81,21 +112,34 @@ SpawnBox walks you through a short setup wizard, then shows a progress bar while
   Install log: /var/log/spawnbox-install.log
 ```
 
-Open that URL in your browser, log in, and create your first Minecraft server from Crafty's dashboard.
+Open that URL in your browser, log in, and create your first Minecraft server
+from Crafty's dashboard.
 
 ---
 
-## Connecting to Your Server
+## ██ System Requirements
 
-### From your home network
+| | |
+|---|---|
+| **OS** | Ubuntu 22.04+, Debian 11+, or Raspberry Pi OS |
+| **RAM** | 4 GB minimum (8 GB+ recommended) |
+| **Disk** | 10 GB free minimum |
+| **Network** | Internet connection for initial setup |
 
-No extra setup needed. Anyone on your Wi-Fi connects using the server's IP address shown by Crafty Controller. No port forwarding required.
+SpawnBox does **not** install the operating system. It requires Linux to
+already be running on the machine.
 
-### From outside your home network
+---
 
-Your router blocks incoming connections by default. The easiest way around this — no router access needed — is [Playit.gg](https://playit.gg), a free tunnel service built for exactly this situation.
+## ██ Connecting to Your Server
 
-If you chose to install Playit.gg during setup, run this on your server to configure it:
+**On your home network** — no extra setup needed. Anyone on your Wi-Fi can
+connect using the server IP shown in Crafty Controller.
+
+**From outside your home** — your router blocks incoming connections by default.
+[Playit.gg](https://playit.gg) solves this without requiring router access or
+port forwarding. If you installed it during setup, run this on your server
+to finish configuring it:
 
 ```bash
 playit setup
@@ -105,35 +149,25 @@ Then share the tunnel address with your friends.
 
 ---
 
-## Security Hardening
+## ██ The Browser Warning
 
-If you enable security hardening during setup, SpawnBox makes three changes:
-
-1. **SSH moves to port 54321** — you'll need to connect with `ssh -p 54321 user@your-server` going forward
-2. **UFW firewall** is enabled with a deny-by-default policy, allowing only the ports Crafty needs plus SSH
-3. **Fail2ban** is installed to block repeated failed login attempts
-
-A backup of your original SSH config is saved automatically. The uninstaller can restore it.
+When you first open Crafty Controller, your browser will show a security
+warning. That's expected — Crafty uses a self-signed HTTPS certificate. Click
+**Advanced** and proceed. The connection is encrypted and safe.
 
 ---
 
-## Browser Security Warning
-
-When you first open Crafty Controller, your browser will show a security warning. This is expected — Crafty uses a self-signed HTTPS certificate. Click "Advanced" and proceed. The connection is encrypted and safe.
-
----
-
-## Uninstalling
+## ██ Uninstalling
 
 ```bash
 sudo bash spawnbox.sh --uninstall
 ```
 
-SpawnBox will ask whether to keep your Minecraft worlds and backups before removing anything. Your data is never silently deleted.
+SpawnBox will ask before removing anything. Your worlds and backups are never
+silently deleted. If you enabled security hardening, it will offer to restore
+your original SSH configuration.
 
-If you enabled security hardening, the uninstaller will offer to restore your original SSH configuration.
-
-To also remove Docker afterward:
+To also remove Docker afterwards:
 
 ```bash
 sudo apt-get remove docker-ce docker-ce-cli containerd.io
@@ -141,68 +175,37 @@ sudo apt-get remove docker-ce docker-ce-cli containerd.io
 
 ---
 
-## Running the Script Again
-
-Safe to do. SpawnBox checks for each component before installing and skips anything already present.
-
----
-
-## Troubleshooting
-
-**Crafty Controller isn't loading after install**
-
-Give it a few minutes — Crafty sets up its internal database on first run. Check the log:
+## ██ All Commands
 
 ```bash
-cat /var/log/spawnbox-install.log
-```
-
-**I enabled security hardening and can't SSH in**
-
-SSH moved to port 54321. Connect with:
-
-```bash
-ssh -p 54321 user@your-server-ip
-```
-
-**Something went wrong during install**
-
-The install log captures everything:
-
-```bash
-cat /var/log/spawnbox-install.log
-```
-
-If you're stuck, [open an issue on GitHub](https://github.com/pauldavid1974/spawnbox/issues) and include the relevant section of the log.
-
----
-
-## Other Commands
-
-```bash
-sudo bash spawnbox.sh             # Install
-sudo bash spawnbox.sh --uninstall # Uninstall
+sudo bash spawnbox.sh             # Launch SpawnBox (install or remove — the menu will ask)
+sudo bash spawnbox.sh --uninstall # Go straight to uninstall
 bash spawnbox.sh --version        # Show version
 bash spawnbox.sh --help           # Show help
 ```
 
 ---
 
-## What SpawnBox Does NOT Do
+## ██ Support
 
-- Install the operating system
-- Manage Minecraft server updates (Crafty does this)
-- Run as a background service (it's a one-time installer)
-- Configure your router or open ports (use Playit.gg instead)
+SpawnBox installs third-party software. For help with those products, go to
+their own documentation:
+
+| Product | Support |
+|---|---|
+| **Crafty Controller** | [docs.craftycontrol.com](https://docs.craftycontrol.com) |
+| **Docker** | [docs.docker.com](https://docs.docker.com) |
+| **Playit.gg** | [playit.gg](https://playit.gg) |
+| **UFW** | [help.ubuntu.com/community/UFW](https://help.ubuntu.com/community/UFW) |
+| **Fail2ban** | [github.com/fail2ban/fail2ban](https://github.com/fail2ban/fail2ban) |
+
+For bugs or issues with SpawnBox itself, [open an issue on GitHub](https://github.com/pauldavid1974/spawnbox/issues).
 
 ---
 
-## Credits
+## ██ Credits
 
-Built by [pauldavid1974](https://github.com/pauldavid1974) with AI collaboration from [Claude](https://claude.ai) (Anthropic).
+Built by [pauldavid1974](https://github.com/pauldavid1974) with AI
+collaboration from [Claude](https://claude.ai) (Anthropic).
 
-Powered by [Docker](https://docker.com) and [Crafty Controller](https://craftycontrol.com).
-
-## License
-
-MIT — see [LICENSE](LICENSE) for details.
+**License:** MIT — see [LICENSE](LICENSE) for details.

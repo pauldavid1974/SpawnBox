@@ -15,7 +15,7 @@ set -uo pipefail
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-SPAWNBOX_VERSION="2.1.1"
+SPAWNBOX_VERSION="2.1.2"
 
 # Crafty Docker image — change this line to pin a specific version
 CRAFTY_IMAGE="registry.gitlab.com/crafty-controller/crafty-4:latest"
@@ -39,7 +39,9 @@ LOG_FILE="/var/log/spawnbox-install.log"
 
 # User choices (set by wizard)
 WANT_SWAP="no"
-WANT_SECURITY="no"
+WANT_SSH_HARDEN="no"
+WANT_UFW="no"
+WANT_FAIL2BAN="no"
 WANT_TUNNEL="no"
 
 # System state (set by preflight)
@@ -181,29 +183,96 @@ assess_system() {
 # ---------------------------------------------------------------------------
 # Wizard (whiptail)
 # ---------------------------------------------------------------------------
-run_wizard() {
-    # Welcome
-    whiptail --title "SpawnBox v${SPAWNBOX_VERSION}" --msgbox \
-        "Welcome to SpawnBox!\n\nThis will turn your PC into a Minecraft server by installing Docker and Crafty Controller.\n\nPress OK to continue." 12 60 || true
 
+# show_main_menu — ASCII art welcome screen with Install / Remove choice.
+# ESC or Cancel exits immediately. "remove" calls do_uninstall then exits.
+# "install" returns so the main flow continues.
+show_main_menu() {
+    local art
+    art=$(cat <<'SPAWNBOX_ART'
+      █████ ████   ███  █   █ █   █ ████   ███  █   █
+      █     █   █ █   █ █   █ ██  █ █   █ █   █  █ █
+      ████  ████  █████ █ █ █ █ █ █ ████  █   █   █
+          █ █     █   █ ██ ██ █  ██ █   █ █   █  █ █
+      █████ █     █   █ █   █ █   █ ████   ███  █   █
+SPAWNBOX_ART
+)
+    local banner="
+
+${art}
+                           v${SPAWNBOX_VERSION}
+               ──────────────────────────────
+            Turn Any PC Into a Minecraft Server
+
+                 What Would You Like to Do?"
+
+    local choice rc=0
+    choice=$(whiptail --title "SpawnBox" \
+        --menu "${banner}" 26 66 2 \
+        "Install SpawnBox"                    "" \
+        "Remove SpawnBox (or its components)" "" \
+        3>&1 1>&2 2>&3) || rc=$?
+
+    # ESC (255) or Cancel (1) → clean exit
+    if (( rc != 0 )); then
+        clear
+        echo "Goodbye."
+        exit 0
+    fi
+
+    if [[ "$choice" == "Remove SpawnBox (or its components)" ]]; then
+        do_uninstall
+        exit 0
+    fi
+    # "install" — fall through; main flow continues
+}
+
+# wizard_or_exit — wrapper for whiptail calls inside run_wizard.
+# ESC (exit code 255) exits the installer immediately.
+# Cancel/No (exit code 1) returns 1 so the caller can skip that feature.
+# OK/Yes (exit code 0) returns 0.
+wizard_or_exit() {
+    local rc=0
+    "$@" || rc=$?
+    if (( rc == 255 )); then
+        clear
+        echo "Installation cancelled."
+        exit 0
+    fi
+    return $rc
+}
+
+run_wizard() {
     # Swap — only ask if needed and possible
     if [[ "$NEEDS_SWAP" == true ]] && [[ "$HAS_SPACE" == true ]]; then
-        if whiptail --title "Memory" --yesno \
+        if wizard_or_exit whiptail --title "Memory" --yesno \
             "Your system has ${SYS_RAM_GB} GB of RAM (less than 16 GB).\n\nWould you like to add an 8 GB swap file to help prevent crashes?" 11 60; then
             WANT_SWAP="yes"
         fi
     fi
 
-    # Security hardening — only ask if system looks unhardened
+    # Security hardening — only ask if system looks unhardened.
+    # Shows a checklist so the user can pick exactly what to apply (all ON by default).
+    # Note: whiptail --checklist output requires fd-swap (3>&1 1>&2 2>&3), so ESC is
+    # checked inline rather than via wizard_or_exit.
     if [[ "$NEEDS_SEC" == true ]]; then
-        if whiptail --title "Security Hardening" --yesno \
-            "Your system is using default security settings.\n\nWould you like SpawnBox to:\n\n• Move SSH to port ${HARDENED_SSH_PORT}\n• Enable UFW firewall\n• Install Fail2ban (brute-force protection)" 14 60; then
-            WANT_SECURITY="yes"
-        fi
+        local sec_choices rc=0
+        sec_choices=$(whiptail --title "Security Hardening" \
+            --checklist "Your system is using default security settings.\n\nSelect the protections to apply (all recommended):" \
+            17 64 3 \
+            "ssh"      "Move SSH to port ${HARDENED_SSH_PORT}"  ON \
+            "ufw"      "Enable UFW firewall with game ports"    ON \
+            "fail2ban" "Fail2ban brute-force protection"        ON \
+            3>&1 1>&2 2>&3) || rc=$?
+        # ESC → exit installer; Cancel (1) with no selection → skip security entirely
+        (( rc == 255 )) && { clear; echo "Installation cancelled."; exit 0; }
+        [[ "$sec_choices" == *'"ssh"'*      ]] && WANT_SSH_HARDEN="yes"
+        [[ "$sec_choices" == *'"ufw"'*      ]] && WANT_UFW="yes"
+        [[ "$sec_choices" == *'"fail2ban"'* ]] && WANT_FAIL2BAN="yes"
     fi
 
     # Playit.gg
-    if whiptail --title "External Access" --yesno \
+    if wizard_or_exit whiptail --title "External Access" --yesno \
         "Do you want friends outside your home network to be able to join?\n\nThis installs Playit.gg — a free tunnel service that avoids port forwarding." 11 60; then
         WANT_TUNNEL="yes"
     fi
@@ -211,20 +280,31 @@ run_wizard() {
     # Final confirmation
     local summary="SpawnBox will now install:\n\n"
     summary+="  • Docker\n"
-    summary+="  • Crafty Controller (Minecraft server manager)\n"
-    [[ "$WANT_SWAP" == "yes" ]]     && summary+="\n  • 8 GB swap file\n"
-    [[ "$WANT_SECURITY" == "yes" ]] && summary+="\n  • Security hardening (SSH ${HARDENED_SSH_PORT}, UFW, Fail2ban)\n"
-    [[ "$WANT_TUNNEL" == "yes" ]]   && summary+="\n  • Playit.gg tunnel\n"
-    summary+="\nProceed?"
+    summary+="  • Crafty Controller (Minecraft server manager)"
+    [[ "$WANT_SWAP" == "yes" ]] && summary+="\n  • 8 GB swap file"
 
-    if ! whiptail --title "Ready to Install" --yesno "${summary}" 18 60; then
+    local any_sec="no"
+    if [[ "$WANT_SSH_HARDEN" == "yes" ]] || [[ "$WANT_UFW" == "yes" ]] || \
+        [[ "$WANT_FAIL2BAN" == "yes" ]]; then
+        any_sec="yes"
+    fi
+    if [[ "$any_sec" == "yes" ]]; then
+        summary+="\n  • Security hardening:"
+        [[ "$WANT_SSH_HARDEN" == "yes" ]] && summary+="\n      - SSH moved to port ${HARDENED_SSH_PORT}"
+        [[ "$WANT_UFW"        == "yes" ]] && summary+="\n      - UFW firewall enabled"
+        [[ "$WANT_FAIL2BAN"   == "yes" ]] && summary+="\n      - Fail2ban brute-force protection"
+    fi
+    [[ "$WANT_TUNNEL" == "yes" ]] && summary+="\n  • Playit.gg tunnel"
+    summary+="\n\nProceed?"
+
+    if ! wizard_or_exit whiptail --title "Ready to Install" --yesno "${summary}" 20 64; then
         clear
         echo "Installation cancelled."
         exit 0
     fi
 
     # Log choices
-    log "User choices: swap=${WANT_SWAP}, security=${WANT_SECURITY}, tunnel=${WANT_TUNNEL}"
+    log "User choices: swap=${WANT_SWAP}, ssh_harden=${WANT_SSH_HARDEN}, ufw=${WANT_UFW}, fail2ban=${WANT_FAIL2BAN}, tunnel=${WANT_TUNNEL}"
 }
 
 # ---------------------------------------------------------------------------
@@ -359,43 +439,55 @@ COMPOSEFILE
     return 0
 }
 
-do_security() {
-    log "Applying security hardening..."
-
-    # --- SSH port ---
+do_ssh_harden() {
+    log "Hardening SSH port..."
     if grep -q "^Port ${HARDENED_SSH_PORT}" /etc/ssh/sshd_config 2>/dev/null; then
         log "SSH already on port ${HARDENED_SSH_PORT} — skipping SSH config"
-    else
-        # Backup SSH config before touching it
-        run_cmd cp /etc/ssh/sshd_config \
-            "/etc/ssh/sshd_config.spawnbox.bak.$(date +%Y%m%d-%H%M%S)"
-
-        sed -i '/^Port /d' /etc/ssh/sshd_config
-        sed -i '/^#Port /d' /etc/ssh/sshd_config
-        echo "Port ${HARDENED_SSH_PORT}" >> /etc/ssh/sshd_config
-
-        # Handle Ubuntu 22.10+ ssh.socket issue
-        if systemctl list-unit-files 2>/dev/null | grep -q "ssh.socket"; then
-            run_cmd systemctl disable --now ssh.socket 2>/dev/null || true
-            run_cmd rm -rf /etc/systemd/system/ssh.socket.d 2>/dev/null || true
-            run_cmd systemctl daemon-reload
-        fi
-        run_cmd systemctl unmask ssh.service
-        run_cmd systemctl enable --now ssh.service
-        run_cmd systemctl restart ssh
-        log "SSH port set to ${HARDENED_SSH_PORT}"
+        return 0
     fi
 
-    # --- fail2ban ---
-    if command -v fail2ban-server &>/dev/null \
-        && grep -q "port = ${HARDENED_SSH_PORT}" /etc/fail2ban/jail.local 2>/dev/null; then
-        log "Fail2ban already installed and configured — skipping"
-    else
-        run_cmd apt-get update -qq
-        run_cmd apt-get install -y -qq fail2ban \
-            || { log "Failed to install fail2ban"; return 1; }
+    # Backup SSH config before touching it
+    run_cmd cp /etc/ssh/sshd_config \
+        "/etc/ssh/sshd_config.spawnbox.bak.$(date +%Y%m%d-%H%M%S)"
 
-        cat > /etc/fail2ban/jail.local <<EOF
+    sed -i '/^Port /d' /etc/ssh/sshd_config
+    sed -i '/^#Port /d' /etc/ssh/sshd_config
+    echo "Port ${HARDENED_SSH_PORT}" >> /etc/ssh/sshd_config
+
+    # Handle Ubuntu 22.10+ ssh.socket issue
+    if systemctl list-unit-files 2>/dev/null | grep -q "ssh.socket"; then
+        run_cmd systemctl disable --now ssh.socket 2>/dev/null || true
+        run_cmd rm -rf /etc/systemd/system/ssh.socket.d 2>/dev/null || true
+        run_cmd systemctl daemon-reload
+    fi
+    run_cmd systemctl unmask ssh.service
+    run_cmd systemctl enable --now ssh.service
+    run_cmd systemctl restart ssh
+    log "SSH port set to ${HARDENED_SSH_PORT}"
+}
+
+do_fail2ban() {
+    log "Installing Fail2ban..."
+
+    # Protect whichever SSH port is actually active after this install
+    local active_ssh_port
+    if [[ "$WANT_SSH_HARDEN" == "yes" ]]; then
+        active_ssh_port="${HARDENED_SSH_PORT}"
+    else
+        active_ssh_port="${CURRENT_SSH_PORT}"
+    fi
+
+    if command -v fail2ban-server &>/dev/null \
+        && grep -q "port = ${active_ssh_port}" /etc/fail2ban/jail.local 2>/dev/null; then
+        log "Fail2ban already installed and configured — skipping"
+        return 0
+    fi
+
+    run_cmd apt-get update -qq
+    run_cmd apt-get install -y -qq fail2ban \
+        || { log "Failed to install fail2ban"; return 1; }
+
+    cat > /etc/fail2ban/jail.local <<EOF
 [DEFAULT]
 bantime = 1d
 findtime = 10m
@@ -403,15 +495,25 @@ maxretry = 5
 
 [sshd]
 enabled = true
-port = ${HARDENED_SSH_PORT}
+port = ${active_ssh_port}
 EOF
 
-        run_cmd systemctl enable --now fail2ban
-        run_cmd systemctl restart fail2ban
-        log "Fail2ban installed and configured"
+    run_cmd systemctl enable --now fail2ban
+    run_cmd systemctl restart fail2ban
+    log "Fail2ban installed and configured (protecting SSH on port ${active_ssh_port})"
+}
+
+do_ufw() {
+    log "Configuring UFW firewall..."
+
+    # Use the port SSH is actually listening on to avoid locking the user out
+    local active_ssh_port
+    if [[ "$WANT_SSH_HARDEN" == "yes" ]]; then
+        active_ssh_port="${HARDENED_SSH_PORT}"
+    else
+        active_ssh_port="${CURRENT_SSH_PORT}"
     fi
 
-    # --- UFW firewall ---
     if ! command -v ufw &>/dev/null; then
         run_cmd apt-get update -qq
         run_cmd apt-get install -y -qq ufw \
@@ -422,7 +524,7 @@ EOF
     run_cmd ufw default allow outgoing
 
     local -A ufw_rules=(
-        ["${HARDENED_SSH_PORT}/tcp"]="SSH"
+        ["${active_ssh_port}/tcp"]="SSH"
         ["${CRAFTY_PORT}/tcp"]="Crafty web UI"
         ["8123/tcp"]="Crafty websocket"
         ["${MC_JAVA_PORT}/tcp"]="Minecraft Java"
@@ -439,8 +541,15 @@ EOF
     done
 
     run_cmd ufw --force enable
+    log "UFW enabled (SSH allowed on port ${active_ssh_port})"
+}
 
-    log "Security hardening complete (SSH port ${HARDENED_SSH_PORT}, UFW enabled, Fail2ban active)"
+do_security() {
+    log "Applying security hardening..."
+    [[ "$WANT_SSH_HARDEN" == "yes" ]] && { do_ssh_harden  || return 1; }
+    [[ "$WANT_FAIL2BAN"   == "yes" ]] && { do_fail2ban    || return 1; }
+    [[ "$WANT_UFW"        == "yes" ]] && { do_ufw         || return 1; }
+    log "Security hardening complete"
 }
 
 do_tunnel() {
@@ -534,11 +643,21 @@ show_completion() {
     echo "  Change your password after the first login!"
     echo ""
 
-    if [[ "$WANT_SECURITY" == "yes" ]]; then
+    if [[ "$WANT_SSH_HARDEN" == "yes" ]]; then
         echo "  --------------------------------------------------------"
         echo "  SSH port changed to ${HARDENED_SSH_PORT}"
         echo "  Next time connect with: ssh -p ${HARDENED_SSH_PORT} user@${ip_address}"
         echo "  --------------------------------------------------------"
+        echo ""
+    fi
+
+    if [[ "$WANT_UFW" == "yes" ]]; then
+        echo "  UFW firewall is active. Game ports are open."
+        echo ""
+    fi
+
+    if [[ "$WANT_FAIL2BAN" == "yes" ]]; then
+        echo "  Fail2ban is running (SSH brute-force protection active)."
         echo ""
     fi
 
@@ -626,10 +745,18 @@ do_uninstall() {
         if whiptail --title "Revert Security?" --yesno \
             "A backup of your original SSH config was found.\n\nRestore it and revert firewall rules?" 10 60; then
             cp "$backup" /etc/ssh/sshd_config
-            systemctl restart ssh 2>/dev/null || true
-            ufw delete allow ${HARDENED_SSH_PORT}/tcp 2>/dev/null || true
+            # Read original port from restored config (default 22 if not set)
+            local original_ssh_port
+            original_ssh_port=$(grep -E "^Port " /etc/ssh/sshd_config | awk '{print $2}' | head -n1)
+            original_ssh_port="${original_ssh_port:-22}"
+            # CRITICAL: allow original port BEFORE removing hardened port — avoids lockout
+            ufw allow "${original_ssh_port}/tcp" 2>/dev/null || true
             ufw --force reload 2>/dev/null || true
-            echo "  SSH config restored from backup."
+            # Now safe to remove the hardened port rule
+            ufw delete allow "${HARDENED_SSH_PORT}/tcp" 2>/dev/null || true
+            systemctl restart ssh 2>/dev/null || true
+            ufw --force reload 2>/dev/null || true
+            echo "  SSH config restored from backup (SSH now on port ${original_ssh_port})."
         fi
     fi
 
@@ -637,10 +764,52 @@ do_uninstall() {
     rm -f /etc/fail2ban/jail.local 2>/dev/null || true
     systemctl restart fail2ban 2>/dev/null || true
 
+    # Remove remaining UFW rules added by SpawnBox
+    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
+        for rule in "${CRAFTY_PORT}/tcp" "8123/tcp" "${MC_JAVA_PORT}/tcp" \
+                    "25566:25570/tcp" "${MC_BEDROCK_PORT}/udp"; do
+            ufw delete allow ${rule} >> "${LOG_FILE}" 2>&1 || true
+        done
+        ufw --force reload >> "${LOG_FILE}" 2>&1 || true
+        log "Removed SpawnBox UFW rules"
+        echo "  Firewall rules removed."
+    fi
+
+    # Remove swap file if SpawnBox created it
+    if [[ -f /swapfile ]]; then
+        if whiptail --title "Remove Swap File?" --yesno \
+            "An 8 GB swap file exists at /swapfile.\n\nRemove it and free the disk space?" 10 60; then
+            swapoff /swapfile 2>/dev/null || true
+            rm -f /swapfile
+            sed -i '/\/swapfile/d' /etc/fstab
+            log "Swap file removed"
+            echo "  Swap file removed."
+        fi
+    fi
+
+    # Remove Docker
+    if command -v docker &>/dev/null; then
+        if whiptail --title "Remove Docker?" --yesno \
+            "Docker is still installed.\n\nRemove Docker and all its components?" 10 60; then
+            run_cmd apt-get remove -y docker-ce docker-ce-cli containerd.io \
+                docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras
+            run_cmd apt-get autoremove -y
+            rm -rf /var/lib/docker /etc/docker >> "${LOG_FILE}" 2>&1 || true
+            log "Docker removed"
+            echo "  Docker removed."
+        fi
+    fi
+
+    # Remove install log
+    if [[ -f "${LOG_FILE}" ]]; then
+        if whiptail --title "Remove Log File?" --yesno \
+            "Remove the SpawnBox install log at ${LOG_FILE}?" 9 60; then
+            rm -f "${LOG_FILE}"
+        fi
+    fi
+
     echo ""
     echo "SpawnBox has been uninstalled."
-    echo "Docker is still installed. To remove it:"
-    echo "  sudo apt-get remove docker-ce docker-ce-cli containerd.io"
     echo ""
 
     log "=== SpawnBox Uninstall Complete ==="
@@ -685,7 +854,7 @@ do_install() {
         return 1
     fi
 
-    if [[ "$WANT_SECURITY" == "yes" ]]; then
+    if [[ "$WANT_SSH_HARDEN" == "yes" ]] || [[ "$WANT_UFW" == "yes" ]] || [[ "$WANT_FAIL2BAN" == "yes" ]]; then
         echo "75"
         echo "XXX"; echo "Applying security hardening..."; echo "XXX"
         if ! do_security; then
@@ -718,28 +887,28 @@ do_install() {
 # Minecraft Theme
 # ---------------------------------------------------------------------------
 setup_minecraft_theme() {
-    export NEWT_COLORS="root=black,green
-border=yellow,green
-window=black,green
+    export NEWT_COLORS="root=green,black
+border=yellow,black
+window=green,black
 shadow=black,black
-title=yellow,green
+title=yellow,black
 button=black,yellow
 actbutton=black,white
-compactbutton=black,green
-textbox=black,green
-acttextbox=black,green
+compactbutton=green,black
+textbox=green,black
+acttextbox=green,black
 entry=black,yellow
-disentry=black,green
-checkbox=black,green
+disentry=green,black
+checkbox=green,black
 actcheckbox=black,yellow
 error=white,red
-label=black,green
-listbox=black,green
+label=green,black
+listbox=green,black
 actlistbox=black,yellow
 sellistbox=black,yellow
 actsellistbox=black,yellow
 gauge=black,yellow
-emptygauge=black,green
+emptygauge=green,black
 "
 }
 
@@ -765,8 +934,8 @@ draw_progress_screen() {
 
     # ANSI color codes
     local RST='\e[0m'
-    local BG='\e[102m'      # bright green background
-    local FG='\e[30m'       # black foreground
+    local BG='\e[40m'       # black background
+    local FG='\e[32m'       # green foreground
     local YEL='\e[1;33m'   # bold yellow
     local WHT='\e[1;97m'   # bright white
 
@@ -792,11 +961,11 @@ draw_progress_screen() {
     local title="  SpawnBox v${SPAWNBOX_VERSION}  -  Minecraft Server Setup"
     (( ${#title} > inner )) && title="${title:0:$inner}"
 
-    local max_a=$(( inner - 4 ))   # "║ > " is 4 chars, rest is action + padding
+    local max_a=$(( inner - 3 ))   # " > " is 3 chars prefix, leaving inner-3 for action + padding
     (( ${#action} > max_a )) && action="${action:0:$max_a}"
 
-    # Paint screen: set bright green bg, clear, home cursor
-    printf '\e[102m\e[2J\e[H'
+    # Paint screen: set black bg, clear, home cursor
+    printf '\e[40m\e[2J\e[H'
     tput civis 2>/dev/null
     tput cup "$vpad" 0
 
@@ -813,7 +982,7 @@ draw_progress_screen() {
     #  ║                          ║
     printf "${BG}${YEL}${L}║%*s║\n" "$inner" ""
     #  ║ > Installing Docker...   ║
-    printf "${BG}${YEL}${L}║ ${WHT}> %-*s${YEL}║\n" $(( inner - 4 )) "$action"
+    printf "${BG}${YEL}${L}║ ${WHT}> %-*s${YEL}║\n" $(( inner - 3 )) "$action"
     #  ╚══════════════════════════╝
     printf "${BG}${YEL}${L}╚${hborder}╝\n"
     printf "${RST}"
@@ -824,7 +993,8 @@ run_install_with_gauge() {
     rm -f "$status_file"
 
     # Restore terminal on interrupt or normal exit
-    trap 'tput cnorm 2>/dev/null; printf "\e[0m"; clear' EXIT INT TERM
+    trap 'tput cnorm 2>/dev/null; printf "\e[0m"; clear' EXIT
+    trap 'tput cnorm 2>/dev/null; printf "\e[0m"; clear; exit 130' INT TERM
 
     draw_progress_screen 0 "Starting..."
 
@@ -888,6 +1058,7 @@ case "${1:-}" in
         check_os
         ensure_whiptail
         setup_minecraft_theme
+        show_main_menu
         check_architecture
         check_internet
         assess_system
