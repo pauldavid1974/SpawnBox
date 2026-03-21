@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# SpawnBox v2.1.0 — Turn any PC into a Minecraft server with one command.
+# SpawnBox v2.1.1 — Turn any PC into a Minecraft server with one command.
 # https://github.com/pauldavid1974/spawnbox
 #
 # Author: Paul (pauldavid1974)
@@ -15,7 +15,7 @@ set -uo pipefail
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-SPAWNBOX_VERSION="2.1.0"
+SPAWNBOX_VERSION="2.1.1"
 
 # Crafty Docker image — change this line to pin a specific version
 CRAFTY_IMAGE="registry.gitlab.com/crafty-controller/crafty-4:latest"
